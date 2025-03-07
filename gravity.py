@@ -8,30 +8,32 @@ from scipy.integrate import odeint
 This program simulates the gravitational interactions between n-bodies and visualises their motion over
 time. Each body is labelled in order: 0,1,2...n and each list containing information about the bodies are
 to be in order, so that info in list[i] corresponds to body_i.
-At each time interval, a new state vector, y, is created, which contains each spatial component of
+At each time interval, a new matrix, y, is created, which contains each spatial component of
 the velocities and accelerations of each body, ordered as such:
 y = [x_1,y_1,z_1,x_2,y_2,z_2...x_n,y_n,z_n,vx_1,vy_1,vz_1,vx_2,vy_2,vz_2...vx_n,vy_n,vz_n]
 y = [pos_1,pos_2...vel_1,vel_2...]
-
+These matrices are added to another matrix, state, which holds onto the last few states which are then
+displayed as a trailing tail.
 '''
 
+epsilon = 1e-3 # force softening constant, stops divisions by zero in force calculation
 dt = 0.001 # time interval
-n = 5 # number of bodies to simulate
+n = 3 # number of bodies to simulate
 
 #body1
-m_1 = 3
-r_10 = np.array([1,3,0])
-v_10 = np.array([1,0,0])
+m_1 = 60
+r_10 = np.array([0,0,0])
+v_10 = np.array([0,0,0])
 
 #body 2
-m_2 = 4
-r_20 = np.array([-2,-1,0])
-v_20 = np.array([0,0,0])
+m_2 = 5
+r_20 = np.array([-5,0,0])
+v_20 = np.array([0,15,0])
 
 #body 3
-m_3 = 5
-r_30 = np.array([1,-1,0])
-v_30 = np.array([0,0,0])
+m_3 = 1
+r_30 = np.array([-5,-1,0])
+v_30 = np.array([0,15,0])
 
 #body 4
 m_4 = 5
@@ -80,51 +82,35 @@ def motion(y,t):
             if i != j:
                 pos_i = y[3 * i:3 * i + 3]
                 pos_j = y[3 * j:3 * j + 3]
-                vdot[i] = vdot[i] + G * (masses[j] * (pos_j - pos_i) / r_mags[i, j] ** 3)
+                vdot[i] = vdot[i] + G * (masses[j] * (pos_j - pos_i) /
+                                         (r_mags[i, j] ** 3 + epsilon **3))
 
     vdot = np.concatenate(vdot)
     return np.concatenate((v, vdot))
 
 
-time = np.arange(0, 1, dt)
-plot_points = len(time)
-
-state = odeint(motion, state0, time).T
-
-# Create positions, array of all body positions with shape (timesteps, n_bodies, 3 dimensions)
-positions = []
-
-for i in range(n):
-    # Convert state_x and state_y to numpy arrays
-    state_x = np.array(state[3*i])
-    state_y = np.array(state[3*i+1])
-    state_z = np.array(state[3*i+2])
-
-    # Transpose to match expected shape (timesteps, n_bodies, 2)
-    positions.append(np.stack((state_x.T, state_y.T, state_z.T), axis=-1)) # Shape: (timesteps, n_bodies, 2))
-
-positions = np.array(positions)
-
-# Create figure and axis
-fig, ax = plt.subplots()
-ax.set_xlim(-5,5)
-ax.set_ylim(-5,5)
-
-# Initialize objects
-scat = ax.scatter([], [], s=50)  # Scatter plot for current positions
-
-# Initialize trajectory lines (one line for each body)
-lines = [ax.plot([], [], lw=1)[0] for _ in range(n)]  # List of lines for each body
-
-# Colours of each body
-scat_colors = ['red', 'blue', 'green', 'black', 'purple']
-
-# length of trailing line
-trail_length = 250
-
-
 # Update function for animation
 def update(frame):
+    global state
+
+    if frame >= trail_length:
+        # once pre-computed length has run out, start computing next state at every frame
+        last_state = state[:,-1]
+        next_time = np.array([frame*dt, frame*dt+dt])
+        next_state = odeint(motion, last_state, next_time).T
+        state = np.column_stack((state[:,1:],next_state))
+
+    positions = []
+    for i in range(n):
+        # Convert state_x and state_y to numpy arrays
+        state_x = np.array(state[3 * i])
+        state_y = np.array(state[3 * i + 1])
+        state_z = np.array(state[3 * i + 2])
+
+        # Transpose to match expected shape (timesteps, n_bodies, 2)
+        positions.append(np.stack((state_x.T, state_y.T, state_z.T), axis=-1))  # Shape: (timesteps, n_bodies, 2))
+    positions = np.array(positions)
+
     # Update the scatter plot (current positions)
     scat.set_offsets(positions[:, frame, :2])
     scat.set_facecolor(scat_colors)
@@ -133,7 +119,6 @@ def update(frame):
     # Update the trajectory lines
     for i in range(n):  # Loop through each body
         start_frame = max(0, frame - trail_length)
-
         lines[i].set_data(positions[i, start_frame:frame + 1, 0],
                           positions[i, start_frame:frame + 1, 1])  # Path for body i up to current frame
         lines[i].set_color(scat_colors[i])
@@ -148,7 +133,29 @@ def infinite_generator():
         frame += 1  # Keep increasing indefinitely
 
 
+# length of trailing line
+trail_length = 250
+
+time = np.arange(0, trail_length*dt, dt)
+
+# pre-computes a length, specified in trail_length to firstly display
+state = odeint(motion, state0, time).T
+
+# Create figure and axis
+fig, ax = plt.subplots()
+ax.set_xlim(-6,6)
+ax.set_ylim(-6,6)
+
+# Initialize objects
+scat = ax.scatter([], [], s=50)  # Scatter plot for current positions
+
+# Initialize trajectory lines (one line for each body)
+lines = [ax.plot([], [], lw=1)[0] for _ in range(n)]  # List of lines for each body
+
+# Colours of each body
+scat_colors = ['red', 'blue', 'green', 'black', 'purple']
+
 # Create animation
-ani = animation.FuncAnimation(fig, update, frames=plot_points, interval=1, blit=True, repeat=False)
+ani = animation.FuncAnimation(fig, update, frames=infinite_generator(), interval=1, blit=True, repeat=False)
 
 plt.show()
