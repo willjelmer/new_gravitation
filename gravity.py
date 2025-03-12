@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import matplotlib.widgets as wgd
 import matplotlib.animation as animation
 from scipy.integrate import odeint
+import time
+
 
 '''
 This program simulates the gravitational interactions between n-bodies and visualises their motion over
@@ -16,40 +18,53 @@ These matrices are added to another matrix, state, which holds onto the last few
 displayed as a trailing tail.
 '''
 
-epsilon = 1e-3 # force softening constant, stops divisions by zero in force calculation
-dt = 0.001 # time interval
-n = 3 # number of bodies to simulate
+# used for generating trajectory trails
+past_points = np.array([])
+relative_trails = [False]
 
-#body1
-m_1 = 60
+focus = "none" # initial body to focus on
+
+epsilon = 1e-3 # force softening constant, stops divisions by zero in force calculation
+dt = 0.1 # time interval
+n = 4 # number of bodies to simulate
+
+G = 6.6743e-11 * 1.49299e8 # in units where length = 10^7km, mass = 2e28kg, time = 1 day
+
+# Initialise bodies
+#body1 sun
+m_1 = 99.4
 r_10 = np.array([0,0,0])
 v_10 = np.array([0,0,0])
 
-#body 2
-m_2 = 5
-r_20 = np.array([-5,0,0])
-v_20 = np.array([0,15,0])
+#body 2 earth
+m_2 = 3.0e-4
+r_20 = np.array([-1.459847e8,2.754070e7,-1.093196e3])/1e7 # * 10^7 km
+v_20 = np.array([-5.996424,-2.937786e1,2.292323e-3])*(60**2*24*1)/1e7 # * (10^7km) month^-1
 
-#body 3
-m_3 = 1
-r_30 = np.array([-5,-1,0])
-v_30 = np.array([0,15,0])
+#body 3 moon
+m_3 = 3.6e-6
+r_30 = np.array([-1.461795e8,2.787552e7,2.889309e4])/1e7
+v_30 = np.array([-6.892628,-2.984489e1,-4.503372e-2])*(60**2*24*1)/1e7
 
 #body 4
-m_4 = 5
-r_40 = np.array([-2,4,0])
-v_40 = np.array([-1,0,0])
+m_4 = 74
+r_40 = [10,10,0]
+v_40 = [-0.5,-0.2,0]
+
+
+# #body 4 jupiter
+# m_4 = 0.0949095
+# r_40 = np.array([-8.124191e8,7.594032e8,-4.972164e6])/1e7
+# v_40 = np.array([-1.315457e1,2.005578,2.860240e-1])*(60**2*24*1)/1e7
 
 #body 5
 m_5 = 6
 r_50 = np.array([2,-2,0])
-v_50 = np.array([1,0,0])
+v_50 = np.array([1,25,0])
 
 masses = np.array([m_1,m_2,m_3,m_4,m_5][:n])
 state0 = np.concatenate(np.concatenate(((r_10,r_20,r_30,r_40,r_50)[:n],
                                         (v_10,v_20,v_30,v_40,v_50)[:n])))
-
-G = 4*np.pi**2 # natural units
 
 
 def motion(y,t):
@@ -91,60 +106,124 @@ def motion(y,t):
 
 # Update function for animation
 def update(frame):
+    '''
+    This function handles all calculations and graph updates every frame.
+    :param frame:
+    :return: Animation function requires that all updated parameters are returned
+    '''
+
+    # Take start time to measure FPS at the end
+    start_time = time.time()
+
     global state
 
-    if frame >= trail_length:
-        # once pre-computed length has run out, start computing next state at every frame
-        last_state = state[:,-1]
-        next_time = np.array([frame*dt, frame*dt+dt])
-        next_state = odeint(motion, last_state, next_time).T
-        state = np.column_stack((state[:,1:],next_state))
+    # Reset axes
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    ax.cla()
 
+    # Create positions list which holds only x,y,z coordinates of the bodies
     positions = []
     for i in range(n):
-        # Convert state_x and state_y to numpy arrays
         state_x = np.array(state[3 * i])
         state_y = np.array(state[3 * i + 1])
         state_z = np.array(state[3 * i + 2])
-
         # Transpose to match expected shape (timesteps, n_bodies, 2)
         positions.append(np.stack((state_x.T, state_y.T, state_z.T), axis=-1))  # Shape: (timesteps, n_bodies, 2))
     positions = np.array(positions)
 
+    # compute next state, and add this to the state function
+    last_state = state[:, -1]
+    next_time = np.array([frame * dt, frame * dt + dt])
+    next_state = odeint(motion, last_state, next_time).T[:,1:]
+    state = np.hstack((state,next_state))
+
+    # for focussing on objects.
+    start_frame = max(0, frame - trail_length)
+    if focus != "none":
+        infocus = int(focus)
+        focus_position = positions[infocus, frame, :2] # extract the position of the focussed object
+        if relative_trails[0]:
+            # past points to calculate trail relative to focus point
+            points = positions[infocus, start_frame:frame + 1, :]
+        else:
+            points = np.tile(focus_position,(frame+1-start_frame,1))
+        # reshape the position matrix to match scatter plot offsets, for easier calculation
+        focus_position = np.vstack([focus_position] * n)
+    else:
+        focus_position = np.zeros((n,2))
+        points = np.zeros((frame + 1 - start_frame,3))
+
     # Update the scatter plot (current positions)
-    scat.set_offsets(positions[:, frame, :2])
+    scat.set_offsets(positions[:, frame, :2]-focus_position)
+    print((positions[:, frame, :2]-focus_position).shape)
+
+    # Set colour and size of each body
     scat.set_facecolor(scat_colors)
     scat.set_sizes(10*masses)
 
-    # Update the trajectory lines
+    # Update the trajectory lines (past positions)
     for i in range(n):  # Loop through each body
-        start_frame = max(0, frame - trail_length)
-        lines[i].set_data(positions[i, start_frame:frame + 1, 0],
-                          positions[i, start_frame:frame + 1, 1])  # Path for body i up to current frame
+        lines[i].set_data(positions[i, start_frame:frame + 1, 0] - points[:,0],
+                          positions[i, start_frame:frame + 1, 1] - points[:,1])  # Path for body i up to current frame
         lines[i].set_color(scat_colors[i])
 
-    return scat, *lines  # Return all objects that are updated
+    ax.set_xlim(xlim)  # Keep zoom level
+    ax.set_ylim(ylim)
+
+    # Calculate and display number of time units passed, and the frames per second
+    elapsed_time = frame * dt  # Convert frames to simulation time
+    time_text.set_text(f'Time: {elapsed_time:.2f} days')
+    real_time_per_frame = 1/(time.time() - start_time)
+    if frame % 5 == 0:
+        real_time_text.set_text(f'FPS: {real_time_per_frame:.6f}')
+
+    return scat, *lines, time_text, real_time_text # Return all objects that are updated
 
 
 def infinite_generator():
+    # This function generates an increasing number of frames, so simulation runs endlessly
     frame = 0
     while True:
         yield frame
         frame += 1  # Keep increasing indefinitely
 
 
+def radio_clicked(val):
+    global focus
+    focus = val
+
+
+def toggle_trails(event):
+    global relative_trails
+    relative_trails[0] = not relative_trails[0]
+
+
 # length of trailing line
 trail_length = 250
 
-time = np.arange(0, trail_length*dt, dt)
-
-# pre-computes a length, specified in trail_length to firstly display
-state = odeint(motion, state0, time).T
+# compute first length to initialize state vector
+timex = np.arange(0, dt, dt)
+state = odeint(motion, state0, timex).T
 
 # Create figure and axis
 fig, ax = plt.subplots()
-ax.set_xlim(-6,6)
-ax.set_ylim(-6,6)
+ax.set_xlim(-16,16)
+ax.set_ylim(-16,16)
+
+# Set up the radio buttons
+radio_ax = plt.axes([0.05, 0.8, 0.15, 0.15])  # Position for the radio buttons
+radio = wgd.RadioButtons(radio_ax,  ["none"] + [str(i) for i in range(n)])
+radio.on_clicked(radio_clicked)
+
+# Set up relative trails button
+button_ax = plt.axes([0.2, 0.85, 0.15, 0.1])
+check = wgd.CheckButtons(button_ax, ['RT'], [False])
+check.on_clicked(toggle_trails)
+
+# Set up text
+time_text = ax.text(0.7, 0.95, '', transform=ax.transAxes, fontsize=10)
+real_time_text = ax.text(0.4, 0.95, '', transform=ax.transAxes, fontsize=10)
 
 # Initialize objects
 scat = ax.scatter([], [], s=50)  # Scatter plot for current positions
@@ -153,7 +232,7 @@ scat = ax.scatter([], [], s=50)  # Scatter plot for current positions
 lines = [ax.plot([], [], lw=1)[0] for _ in range(n)]  # List of lines for each body
 
 # Colours of each body
-scat_colors = ['red', 'blue', 'green', 'black', 'purple']
+scat_colors = ['red', 'blue', 'green', 'orange', 'purple']
 
 # Create animation
 ani = animation.FuncAnimation(fig, update, frames=infinite_generator(), interval=1, blit=True, repeat=False)
